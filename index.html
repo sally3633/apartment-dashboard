@@ -67,14 +67,26 @@
     <!-- 메인 컨테이너 -->
     <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8" id="mainContent" style="display: none;">
         
-        <!-- 헤더 영역 -->
-        <header class="mb-8 flex flex-col md:flex-row md:items-center md:justify-between">
+        <!-- 헤더 영역 (필터 추가됨) -->
+        <header class="mb-8 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
             <div>
                 <h1 class="text-3xl font-bold text-slate-900 flex items-center gap-3">
                     <i data-lucide="building-2" class="w-8 h-8 text-emerald-600"></i>
                     우리 동네 아파트 실거래가 대시보드
                 </h1>
                 <p class="mt-2 text-sm text-slate-500">최근 업데이트된 아파트 실거래가 현황 및 통계입니다.</p>
+            </div>
+            
+            <!-- 동네(법정동) 필터 영역 -->
+            <div class="flex items-center gap-2 bg-white px-4 py-2 rounded-xl border border-slate-200 shadow-sm">
+                <label for="dongFilter" class="text-sm font-bold text-slate-700 whitespace-nowrap flex items-center gap-2">
+                    <i data-lucide="map-pin" class="w-4 h-4 text-emerald-600"></i>
+                    동네 필터
+                </label>
+                <select id="dongFilter" class="bg-slate-50 border border-slate-200 text-slate-900 text-sm rounded-lg focus:ring-emerald-500 focus:border-emerald-500 block w-40 p-2 outline-none cursor-pointer font-medium transition-colors hover:bg-slate-100">
+                    <option value="전체">전체 동네 보기</option>
+                    <!-- JavaScript로 동 목록이 추가됩니다 -->
+                </select>
             </div>
         </header>
 
@@ -177,7 +189,8 @@
         const CSV_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vT3YUN6h_6GuimSjASYrTLlo-hcNRObrTIApeNC8teM3upNRKlMhh0oeJAr8n0TNSGT-HMOOvF48Tdi/pub?gid=876597433&single=true&output=csv';
 
         let chartInstance = null;
-        let globalProcessedData = []; // 데이터 복사를 위한 전역 변수
+        let globalProcessedData = []; // 원본 전체 데이터
+        let currentFilteredData = []; // 현재 화면에 보이는 (필터링된) 데이터
 
         // 토스트 알림 표시 함수 (alert 대체)
         function showToast(message, isError = false) {
@@ -203,9 +216,9 @@
             }, 3000);
         }
 
-        // 데이터 클립보드 복사 함수 (엑셀 붙여넣기용)
+        // 데이터 클립보드 복사 함수 (필터링된 데이터 기준)
         function copyDataToClipboard() {
-            if (globalProcessedData.length === 0) {
+            if (currentFilteredData.length === 0) {
                 showToast('복사할 데이터가 없습니다.', true);
                 return;
             }
@@ -214,7 +227,7 @@
             let textToCopy = "계약일\t아파트명\t법정동\t전용면적(㎡)\t층\t건축년도\t거래금액(만원)\n";
 
             // 데이터 행 추가
-            globalProcessedData.forEach(item => {
+            currentFilteredData.forEach(item => {
                 textToCopy += `${item.rawDate}\t${item.name}\t${item.dong}\t${item.area}\t${item.floor}\t${item.year}\t${item.price}\n`;
             });
 
@@ -228,7 +241,7 @@
             
             try {
                 document.execCommand('copy');
-                showToast('전체 데이터가 복사되었습니다. (엑셀에 붙여넣기 가능)');
+                showToast('현재 화면의 데이터가 복사되었습니다. (엑셀에 붙여넣기 가능)');
             } catch (err) {
                 console.error('복사 실패:', err);
                 showToast('데이터 복사에 실패했습니다.', true);
@@ -278,13 +291,13 @@
             }
         }
 
-        // 데이터 처리 및 UI 렌더링
+        // 데이터 정제 및 초기화
         function processData(rawData) {
             let processedData = [];
+            let uniqueDongs = new Set(); // 동네 목록 추출용 Set
             
             // 1. 데이터 클렌징 및 정제
             rawData.forEach(row => {
-                // 컬럼명이 공백이 포함되어 있을 수 있으므로 방어적 코드 작성
                 const getVal = (key) => {
                     for(let k in row) {
                         if(k.trim() === key) return row[k].trim();
@@ -302,6 +315,11 @@
                 const year = getVal('건축년도');
 
                 if (!dateStr || isNaN(price)) return; // 유효하지 않은 행 무시
+
+                // 법정동 목록에 추가
+                if (dong) {
+                    uniqueDongs.add(dong);
+                }
 
                 // YYYY-MM 형식 추출 (다양한 날짜 포맷 대응)
                 let month = 'Unknown';
@@ -324,17 +342,64 @@
 
             // 날짜 내림차순 정렬 (최신순)
             processedData.sort((a, b) => b.rawDate.localeCompare(a.rawDate));
+            globalProcessedData = processedData;
 
-            globalProcessedData = processedData; // 복사 기능을 위해 데이터 저장
-
-            if(processedData.length === 0) {
+            if(globalProcessedData.length === 0) {
                 showToast('유효한 데이터가 없습니다.', true);
                 document.getElementById('loadingOverlay').style.display = 'none';
                 return;
             }
 
-            // 2. 통계 계산 (요약 카드용)
-            const totalCount = processedData.length;
+            // 2. 동네(법정동) 필터 드롭다운 옵션 추가
+            const dongFilterSelect = document.getElementById('dongFilter');
+            const sortedDongs = Array.from(uniqueDongs).sort();
+            
+            sortedDongs.forEach(dong => {
+                const option = document.createElement('option');
+                option.value = dong;
+                option.textContent = dong;
+                dongFilterSelect.appendChild(option);
+            });
+
+            // 필터 변경 시 대시보드 업데이트 이벤트 리스너 등록
+            dongFilterSelect.addEventListener('change', (e) => {
+                updateDashboard(e.target.value);
+            });
+
+            // 3. 초기 대시보드 화면 렌더링 (전체 데이터)
+            updateDashboard('전체');
+
+            // 4. 로딩 종료 및 화면 표시
+            document.getElementById('loadingOverlay').style.opacity = '0';
+            setTimeout(() => {
+                document.getElementById('loadingOverlay').style.display = 'none';
+                document.getElementById('mainContent').style.display = 'block';
+            }, 300);
+        }
+
+        // 선택된 동네에 맞게 대시보드를 업데이트하는 함수
+        function updateDashboard(selectedDong) {
+            // 필터링 적용
+            if (selectedDong === '전체') {
+                currentFilteredData = globalProcessedData;
+            } else {
+                currentFilteredData = globalProcessedData.filter(item => item.dong === selectedDong);
+            }
+
+            const totalCount = currentFilteredData.length;
+
+            // 데이터가 없는 경우 처리
+            if (totalCount === 0) {
+                document.getElementById('totalCount').innerText = '0건';
+                document.getElementById('avgPrice').innerText = '-';
+                document.getElementById('maxPrice').innerText = '-';
+                document.getElementById('minPrice').innerText = '-';
+                renderChart([], []);
+                renderTable([]);
+                return;
+            }
+
+            // 통계 계산 (요약 카드용)
             let totalPrice = 0;
             let maxPrice = Number.MIN_SAFE_INTEGER;
             let minPrice = Number.MAX_SAFE_INTEGER;
@@ -342,7 +407,7 @@
             // 월별 통계 집계용 객체
             const monthlyStats = {};
 
-            processedData.forEach(item => {
+            currentFilteredData.forEach(item => {
                 totalPrice += item.price;
                 if (item.price > maxPrice) maxPrice = item.price;
                 if (item.price < minPrice) minPrice = item.price;
@@ -357,13 +422,13 @@
 
             const avgPrice = Math.round(totalPrice / totalCount);
 
-            // 3. UI 업데이트 - 요약 카드
+            // UI 업데이트 - 요약 카드
             document.getElementById('totalCount').innerText = `${totalCount.toLocaleString()}건`;
             document.getElementById('avgPrice').innerText = formatKoreanCurrency(avgPrice);
             document.getElementById('maxPrice').innerText = formatKoreanCurrency(maxPrice);
             document.getElementById('minPrice').innerText = formatKoreanCurrency(minPrice);
 
-            // 4. 차트 데이터 준비
+            // 차트 데이터 준비 및 렌더링
             const sortedMonths = Object.keys(monthlyStats).sort();
             const chartLabels = sortedMonths;
             const chartData = sortedMonths.map(month => {
@@ -372,15 +437,8 @@
 
             renderChart(chartLabels, chartData);
 
-            // 5. 테이블 렌더링
-            renderTable(processedData);
-
-            // 6. 로딩 종료 및 화면 표시
-            document.getElementById('loadingOverlay').style.opacity = '0';
-            setTimeout(() => {
-                document.getElementById('loadingOverlay').style.display = 'none';
-                document.getElementById('mainContent').style.display = 'block';
-            }, 300);
+            // 테이블 렌더링
+            renderTable(currentFilteredData);
         }
 
         // 차트 렌더링 (Chart.js)
@@ -468,6 +526,13 @@
 
             // 최대 100개까지만 표시하여 브라우저 부하 방지
             const displayData = data.slice(0, 100);
+
+            if (displayData.length === 0) {
+                const tr = document.createElement('tr');
+                tr.innerHTML = `<td colspan="2" class="px-6 py-10 text-center text-slate-500">선택한 동네의 거래 내역이 없습니다.</td>`;
+                tbody.appendChild(tr);
+                return;
+            }
 
             displayData.forEach(item => {
                 const tr = document.createElement('tr');
